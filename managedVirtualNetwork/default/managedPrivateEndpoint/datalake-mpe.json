@@ -1,0 +1,10 @@
+{
+	"name": "datalake-mpe",
+	"properties": {
+		"privateLinkResourceId": "/subscriptions/419329e1-3f0b-4bb6-badc-4b10f250dfb0/resourceGroups/eTASaccelaratorreview/providers/Microsoft.Storage/storageAccounts/etassynapseaccelarator",
+		"groupId": "dfs",
+		"fqdns": [
+			"etassynapseaccelarator.dfs.core.windows.net"
+		]
+	}
+}

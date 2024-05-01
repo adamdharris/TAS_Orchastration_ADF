@@ -1,0 +1,151 @@
+{
+	"name": "Transformation_TopLevel",
+	"properties": {
+		"activities": [
+			{
+				"name": "GetSumOfObjectsToCopy",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "SELECT count(*) as count FROM @{pipeline().parameters.MainControlTableName} where TriggerName like '%@{pipeline().parameters.trigger}%' and stage = @{pipeline().parameters.stage} and CopyEnabled = 1",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "MetadataDrivenCopy_SQL_ControlDS",
+						"type": "DatasetReference"
+					}
+				}
+			},
+			{
+				"name": "CopyBatchesOfObjectsSequentially",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "GetSumOfObjectsToCopy",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@range(0, add(div(activity('GetSumOfObjectsToCopy').output.firstRow.count,\n                    pipeline().parameters.MaxNumberOfConcurrentTasks),\n                    if(equals(mod(activity('GetSumOfObjectsToCopy').output.firstRow.count,\n                    pipeline().parameters.MaxNumberOfConcurrentTasks), 0), 0, 1)))",
+						"type": "Expression"
+					},
+					"isSequential": true,
+					"activities": [
+						{
+							"name": "CopyObjectsInOneBatch",
+							"description": "Execute another pipeline to copy one batch of objects. The objects belonging to this batch will be copied parallelly.",
+							"type": "ExecutePipeline",
+							"dependsOn": [],
+							"policy": {
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"pipeline": {
+									"referenceName": "Transformation_MiddleLevel",
+									"type": "PipelineReference"
+								},
+								"waitOnCompletion": true,
+								"parameters": {
+									"MaxNumberOfObjectsReturnedFromLookupActivity": {
+										"value": "@pipeline().parameters.MaxNumberOfObjectsReturnedFromLookupActivity",
+										"type": "Expression"
+									},
+									"TopLevelPipelineName": {
+										"value": "@{pipeline().Pipeline}",
+										"type": "Expression"
+									},
+									"TriggerName": {
+										"value": "@pipeline().parameters.trigger",
+										"type": "Expression"
+									},
+									"CurrentSequentialNumberOfBatch": {
+										"value": "@item()",
+										"type": "Expression"
+									},
+									"SumOfObjectsToCopy": {
+										"value": "@activity('GetSumOfObjectsToCopy').output.firstRow.count",
+										"type": "Expression"
+									},
+									"SumOfObjectsToCopyForCurrentBatch": {
+										"value": "@min(pipeline().parameters.MaxNumberOfConcurrentTasks, activity('GetSumOfObjectsToCopy').output.firstRow.count)",
+										"type": "Expression"
+									},
+									"MainControlTableName": {
+										"value": "@pipeline().parameters.MainControlTableName",
+										"type": "Expression"
+									},
+									"databaseName": {
+										"value": "@pipeline().parameters.databaseName",
+										"type": "Expression"
+									},
+									"stage": {
+										"value": "@pipeline().parameters.stage",
+										"type": "Expression"
+									},
+									"PipelineStartTime": {
+										"value": "@pipeline().parameters.PipelineStartTime",
+										"type": "Expression"
+									}
+								}
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"databaseName": {
+				"type": "string",
+				"defaultValue": "controldb"
+			},
+			"MaxNumberOfObjectsReturnedFromLookupActivity": {
+				"type": "int",
+				"defaultValue": 5000
+			},
+			"MaxNumberOfConcurrentTasks": {
+				"type": "int",
+				"defaultValue": 16
+			},
+			"MainControlTableName": {
+				"type": "string",
+				"defaultValue": "config.vw_SQLControlTable"
+			},
+			"stage": {
+				"type": "int",
+				"defaultValue": 1
+			},
+			"trigger": {
+				"type": "string",
+				"defaultValue": "Manual"
+			},
+			"PipelineStartTime": {
+				"type": "string"
+			}
+		},
+		"folder": {
+			"name": "SCD"
+		},
+		"annotations": [],
+		"lastPublishTime": "2024-04-30T00:33:28Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

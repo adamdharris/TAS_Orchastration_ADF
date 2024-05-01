@@ -1,0 +1,9 @@
+{
+	"name": "etas-synapseaccelaratorreview",
+	"location": "australiaeast",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "5960b216-e5e9-42c3-86e9-4129198c95f8",
+		"tenantId": "828ac48e-05ab-4d94-abaf-3ccae6f84aac"
+	}
+}

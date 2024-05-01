@@ -1,0 +1,10 @@
+{
+	"name": "Synapse-mpe",
+	"properties": {
+		"privateLinkResourceId": "/subscriptions/419329e1-3f0b-4bb6-badc-4b10f250dfb0/resourceGroups/eTASaccelaratorreview/providers/Microsoft.Synapse/workspaces/etas-accelartorreview",
+		"groupId": "sql",
+		"fqdns": [
+			"etas-accelartorreview.sql.azuresynapse.net"
+		]
+	}
+}

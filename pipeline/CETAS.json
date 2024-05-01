@@ -1,0 +1,491 @@
+{
+	"name": "CETAS",
+	"properties": {
+		"description": "This pipeline creates CETAS from raw parquet files that require SCD transformation.  Must be triggered before running Transformation_TopLevel",
+		"activities": [
+			{
+				"name": "GetCETASMetadata",
+				"description": "Gets a list of tables/objects in raw-optimised container that require a CETAS for SCD transformations",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": "SELECT * FROM [config].[CetasControlTable]",
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "MetadataDrivenCopy_SQL_ControlDS",
+						"type": "DatasetReference"
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "ForEachTable",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "FilterCopyEnabled",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('FilterCopyEnabled').output.value",
+						"type": "Expression"
+					},
+					"activities": [
+						{
+							"name": "SwitchDataLoadBehaviour",
+							"description": "Switch pipeline activity based on if a Full or Delta load is required",
+							"type": "Switch",
+							"dependsOn": [],
+							"userProperties": [],
+							"typeProperties": {
+								"on": {
+									"value": "@item().dataLoadBehaviour",
+									"type": "Expression"
+								},
+								"cases": [
+									{
+										"value": "FullLoad",
+										"activities": [
+											{
+												"name": "CreateSchema_FullLoad",
+												"description": "Creates a schema in the raw synapse db",
+												"type": "Script",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '@{item().systemName}')\nBEGIN\nEXEC('CREATE SCHEMA @{item().systemName}')\nEND",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											},
+											{
+												"name": "CreateDataSource_FullLoad",
+												"description": "Creates a external data source in the raw synapse db",
+												"type": "Script",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "@concat('IF NOT EXISTS (SELECT * FROM sys.external_data_sources WHERE name = ''', item().containerName, ''') \nCREATE EXTERNAL DATA SOURCE [', item().containerName, ']\nWITH (\n    LOCATION = ', '''abfss://',item().containerName , '@', item().storageAccount, '.dfs.core.windows.net''', ')\n')\n",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											},
+											{
+												"name": "CETASFullLoad",
+												"description": "Executes stored procedure in synapse raw db for CETAS",
+												"type": "SqlServerStoredProcedure",
+												"dependsOn": [
+													{
+														"activity": "LookupLatestFilePath_FullLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"storedProcedureName": "[helper].[usp_GenerateFullLoadDDL_Raw]",
+													"storedProcedureParameters": {
+														"FILEPATH": {
+															"value": {
+																"value": "@activity('LookupLatestFilePath_FullLoad').output.value[0].filepath",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"FILENAME": {
+															"value": {
+																"value": "@item().tableName",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"SCHEMA": {
+															"value": {
+																"value": "@item().systemName",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"STORAGEACCOUNT": {
+															"value": {
+																"value": "@item().storageAccount",
+																"type": "Expression"
+															},
+															"type": "String"
+														}
+													}
+												},
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												}
+											},
+											{
+												"name": "LookupLatestFilePath_FullLoad",
+												"description": "Finds the most recent file path for raw data",
+												"type": "Lookup",
+												"dependsOn": [
+													{
+														"activity": "CreateDataSource_FullLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													},
+													{
+														"activity": "CreateSchema_FullLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													},
+													{
+														"activity": "CreateExternalFileFormat",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "SqlDWSource",
+														"sqlReaderQuery": {
+															"value": "@concat('\nWITH cte AS\n(SELECT \nfct.filepath() AS filepath,\nCONCAT(fct.filepath(1), fct.filepath(2),fct.filepath(3),fct.filepath(4)) as datetimefolder\nFROM \n\tOPENROWSET \n\t(\n\t\tBULK ''', item().systemName,'/', item().tableName, '/FullLoad/*/*/*/*/' , item().tableName , '.parquet'',\n\t\tDATA_SOURCE = ''', item().containerName ,''',\n\t\tFORMAT = ''PARQUET''\n\t)\n\tAS fct\n\tGROUP BY\n\tfct.filepath()\n\t,fct.filepath(1)\n\t,fct.filepath(2)\n\t,fct.filepath(3)\n\t,fct.filepath(4)\n\t) SELECT * FROM cte WHERE datetimefolder = (SELECT MAX(datetimefolder) FROM cte)\n')\n",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "DS_SynapseAnalysticsDB_rawDB",
+														"type": "DatasetReference"
+													},
+													"firstRowOnly": false
+												}
+											},
+											{
+												"name": "CreateExternalFileFormat",
+												"description": "Creates a external file format in the raw synapse db",
+												"type": "Script",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "IF NOT EXISTS (SELECT * FROM sys.external_file_formats WHERE name = 'PARQUET') \n\tCREATE EXTERNAL FILE FORMAT [PARQUET] \n\tWITH ( FORMAT_TYPE = PARQUET);",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											}
+										]
+									},
+									{
+										"value": "DeltaLoad",
+										"activities": [
+											{
+												"name": "CETASDeltaLoad",
+												"description": "Executes stored procedure in synapse raw db for CETAS",
+												"type": "SqlServerStoredProcedure",
+												"dependsOn": [
+													{
+														"activity": "CreateDataSource_DeltaLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													},
+													{
+														"activity": "LookupLatestFilePath_SCD2_FullLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"storedProcedureName": "[helper].[usp_GenerateDeltaLoadDDL_Raw]",
+													"storedProcedureParameters": {
+														"FILENAME": {
+															"value": {
+																"value": "@item().tableName",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"FILEPATH": {
+															"value": {
+																"value": "@activity('LookupLatestFilePath_SCD2_FullLoad').output.value[0].filepath",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"ROWKEY": {
+															"value": {
+																"value": "@item().rowKey",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"SCHEMA": {
+															"value": {
+																"value": "@item().systemName",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"STORAGEACCOUNT": {
+															"value": {
+																"value": "@item().storageAccount",
+																"type": "Expression"
+															},
+															"type": "String"
+														},
+														"WATERMARKCOLUMN": {
+															"value": {
+																"value": "@item().watermarkColumn",
+																"type": "Expression"
+															},
+															"type": "String"
+														}
+													}
+												},
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												}
+											},
+											{
+												"name": "CreateSchema_DeltaLoad",
+												"description": "Creates a schema in the raw synapse db",
+												"type": "Script",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '@{item().systemName}')\nBEGIN\nEXEC('CREATE SCHEMA @{item().systemName}')\nEND",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											},
+											{
+												"name": "CreateDataSource_DeltaLoad",
+												"description": "Creates a external data source in the raw synapse db",
+												"type": "Script",
+												"dependsOn": [
+													{
+														"activity": "CreateSchema_DeltaLoad",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "ls_synapsesqlondemand_rawdb",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "@concat('IF NOT EXISTS (SELECT * FROM sys.external_data_sources WHERE name = ''', item().containerName, ''') \nCREATE EXTERNAL DATA SOURCE [', item().containerName, ']\nWITH (\n    LOCATION = ', '''abfss://',item().containerName , '@', item().storageAccount, '.dfs.core.windows.net''', ')\n')\n",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											},
+											{
+												"name": "LookupLatestFilePath_SCD2_FullLoad",
+												"description": "Gets the most recent file path for full data loads",
+												"type": "Lookup",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "SqlDWSource",
+														"sqlReaderQuery": {
+															"value": "@concat('\nWITH cte AS\n(SELECT \nfct.filepath() AS filepath,\nCONCAT(fct.filepath(1), fct.filepath(2),fct.filepath(3),fct.filepath(4)) as datetimefolder\nFROM \n\tOPENROWSET \n\t(\n\t\tBULK ''', item().systemName,'/', item().tableName, '/FullLoad/*/*/*/*/' , item().tableName , '.parquet'',\n\t\tDATA_SOURCE = ''', item().containerName ,''',\n\t\tFORMAT = ''PARQUET''\n\t)\n\tAS fct\n\tGROUP BY\n\tfct.filepath()\n\t,fct.filepath(1)\n\t,fct.filepath(2)\n\t,fct.filepath(3)\n\t,fct.filepath(4)\n\t) SELECT * FROM cte WHERE datetimefolder = (SELECT MAX(datetimefolder) FROM cte)\n')\n",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "DS_SynapseAnalysticsDB_rawDB",
+														"type": "DatasetReference"
+													},
+													"firstRowOnly": false
+												}
+											}
+										]
+									}
+								],
+								"defaultActivities": [
+									{
+										"name": "NoRecords",
+										"type": "Wait",
+										"dependsOn": [],
+										"userProperties": [],
+										"typeProperties": {
+											"waitTimeInSeconds": 1
+										}
+									}
+								]
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "FilterCopyEnabled",
+				"description": "Filter only tables/objects that need to be copied",
+				"type": "Filter",
+				"dependsOn": [
+					{
+						"activity": "GetCETASMetadata",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('GetCETASMetadata').output.value",
+						"type": "Expression"
+					},
+					"condition": {
+						"value": "@equals(item().copyEnabled,1)",
+						"type": "Expression"
+					}
+				}
+			}
+		],
+		"annotations": [],
+		"lastPublishTime": "2024-04-30T00:33:26Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

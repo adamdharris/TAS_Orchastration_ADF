@@ -1,0 +1,15 @@
+{
+	"name": "ls_azdatalake",
+	"type": "Microsoft.DataFactory/factories/linkedservices",
+	"properties": {
+		"annotations": [],
+		"type": "AzureBlobFS",
+		"typeProperties": {
+			"url": "https://etassynapseaccelarator.dfs.core.windows.net/"
+		},
+		"connectVia": {
+			"referenceName": "AutoIntegrationRuntime1",
+			"type": "IntegrationRuntimeReference"
+		}
+	}
+}

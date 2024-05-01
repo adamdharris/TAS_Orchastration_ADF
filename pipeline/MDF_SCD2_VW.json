@@ -1,0 +1,349 @@
+{
+	"name": "MDF_SCD2_VW",
+	"properties": {
+		"description": "Creates or updates Delta files, based on SCD Type 1 logic.  Accepts parameters for the source, and target object and schema.  Creates a view of the resultant delta directory at first execution.",
+		"activities": [
+			{
+				"name": "Check If Delta Folder Exists",
+				"description": "Checks to see whether a Delta file exists, based on the parsed parameters.",
+				"type": "GetMetadata",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.00:05:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"dataset": {
+						"referenceName": "SCD_Delta_DS",
+						"type": "DatasetReference",
+						"parameters": {
+							"targetName": {
+								"value": "@pipeline().parameters.targetName",
+								"type": "Expression"
+							},
+							"targetSchema": {
+								"value": "@pipeline().parameters.targetSchema",
+								"type": "Expression"
+							},
+							"targetContainer": {
+								"value": "@pipeline().parameters.targetContainer",
+								"type": "Expression"
+							}
+						}
+					},
+					"fieldList": [
+						"exists"
+					],
+					"storeSettings": {
+						"type": "AzureBlobFSReadSettings",
+						"recursive": true,
+						"enablePartitionDiscovery": false
+					},
+					"formatSettings": {
+						"type": "ParquetReadSettings"
+					}
+				}
+			},
+			{
+				"name": "If Delta Exists Condition",
+				"description": "If condition: Conditionally splits activities, based on whether delta files exist at the target.  If they do not, an initial delta hierarchy and view are created.  If they are, a merge-update is performed based on the incoming data, to the sink.",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "Check If Delta Folder Exists",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@activity('Check If Delta Folder Exists').output.exists",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "Data flow_Insert",
+							"description": "Creates, and executes an insert to the target directory, based on the provided parameters.",
+							"type": "ExecuteDataFlow",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "1.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"dataflow": {
+									"referenceName": "MDF_SCD2_Initial_VW",
+									"type": "DataFlowReference",
+									"parameters": {
+										"sourceName": {
+											"value": "'@{pipeline().parameters.sourceName}'",
+											"type": "Expression"
+										},
+										"sourceSchema": {
+											"value": "'@{pipeline().parameters.sourceSchema}'",
+											"type": "Expression"
+										},
+										"targetName": {
+											"value": "'@{pipeline().parameters.targetName}'",
+											"type": "Expression"
+										},
+										"targetSchema": {
+											"value": "'@{pipeline().parameters.targetSchema}'",
+											"type": "Expression"
+										},
+										"targetContainer": {
+											"value": "'@{pipeline().parameters.targetContainer}'",
+											"type": "Expression"
+										}
+									}
+								},
+								"compute": {
+									"coreCount": 8,
+									"computeType": "General"
+								},
+								"traceLevel": "Fine"
+							}
+						},
+						{
+							"name": "CreateDeltaView",
+							"description": "Creates a Delta view of the object directory, based on the provided parameters.",
+							"type": "Script",
+							"dependsOn": [
+								{
+									"activity": "CreateFileFormat",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "ls_synapsesqlondemand",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": {
+											"value": "@concat('CREATE OR ALTER VIEW [',pipeline().parameters.targetSchema,'].[',pipeline().parameters.targetName,']\nAS\nSELECT *\nFROM\n    OPENROWSET(\n        BULK ''',pipeline().parameters.targetSchema,'/',pipeline().parameters.targetName,''',\n        DATA_SOURCE = ''', pipeline().parameters.targetContainer, ''',\n        FORMAT = ''DELTA''\n    ) AS [result];'\n)",
+											"type": "Expression"
+										}
+									}
+								]
+							}
+						},
+						{
+							"name": "CreateSchema",
+							"type": "Script",
+							"dependsOn": [
+								{
+									"activity": "Data flow_Insert",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "ls_synapsesqlondemand_rawdb",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": {
+											"value": "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '@{pipeline().parameters.targetSchema}')\nBEGIN\nEXEC('CREATE SCHEMA@{pipeline().parameters.targetSchema}')\nEND",
+											"type": "Expression"
+										}
+									}
+								],
+								"scriptBlockExecutionTimeout": "02:00:00"
+							}
+						},
+						{
+							"name": "CreateDataSource",
+							"type": "Script",
+							"dependsOn": [
+								{
+									"activity": "CreateSchema",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "ls_synapsesqlondemand_rawdb",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": {
+											"value": "@concat('IF NOT EXISTS (SELECT * FROM sys.external_data_sources WHERE name = ''', pipeline().parameters.targetContainer, ''') \nCREATE EXTERNAL DATA SOURCE [', pipeline().parameters.targetContainer, ']\nWITH (\n    LOCATION = ', '''abfss://', pipeline().parameters.targetContainer, '@', pipeline().parameters.storageAccount, '.dfs.core.windows.net''', ')\n')",
+											"type": "Expression"
+										}
+									}
+								],
+								"scriptBlockExecutionTimeout": "02:00:00"
+							}
+						},
+						{
+							"name": "CreateFileFormat",
+							"type": "Script",
+							"dependsOn": [
+								{
+									"activity": "CreateDataSource",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "ls_synapsesqlondemand",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": "IF NOT EXISTS (SELECT * FROM sys.external_file_formats WHERE name = 'SynapseParquetFormat') \n\tCREATE EXTERNAL FILE FORMAT [SynapseParquetFormat] \n\tWITH ( FORMAT_TYPE = PARQUET)"
+									}
+								],
+								"scriptBlockExecutionTimeout": "02:00:00"
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "Data flow_Update",
+							"description": "Execute a merge (update), based on the provided parameters.",
+							"type": "ExecuteDataFlow",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "1.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"dataflow": {
+									"referenceName": "MDF_SCD2_Update_VW",
+									"type": "DataFlowReference",
+									"parameters": {
+										"sourceName": {
+											"value": "'@{pipeline().parameters.sourceName}'",
+											"type": "Expression"
+										},
+										"sourceSchema": {
+											"value": "'@{pipeline().parameters.sourceSchema}'",
+											"type": "Expression"
+										},
+										"targetName": {
+											"value": "'@{pipeline().parameters.targetName}'",
+											"type": "Expression"
+										},
+										"targetSchema": {
+											"value": "'@{pipeline().parameters.targetSchema}'",
+											"type": "Expression"
+										},
+										"targetContainer": {
+											"value": "'@{pipeline().parameters.targetContainer}'",
+											"type": "Expression"
+										}
+									}
+								},
+								"compute": {
+									"coreCount": 8,
+									"computeType": "General"
+								},
+								"traceLevel": "Fine"
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"targetName": {
+				"type": "string",
+				"defaultValue": "empty_scd2"
+			},
+			"targetSchema": {
+				"type": "string",
+				"defaultValue": "fnd_rel"
+			},
+			"sourceName": {
+				"type": "string",
+				"defaultValue": "vw_empty_hash_scd2"
+			},
+			"sourceSchema": {
+				"type": "string",
+				"defaultValue": "dbo"
+			},
+			"targetContainer": {
+				"type": "string",
+				"defaultValue": "transformed"
+			},
+			"storageAccount": {
+				"type": "string"
+			},
+			"watermarkColumn": {
+				"type": "string"
+			},
+			"rowKey": {
+				"type": "string"
+			}
+		},
+		"folder": {
+			"name": "SCD/Transformations"
+		},
+		"annotations": [],
+		"lastPublishTime": "2024-04-30T00:33:26Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

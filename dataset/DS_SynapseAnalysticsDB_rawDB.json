@@ -1,0 +1,13 @@
+{
+	"name": "DS_SynapseAnalysticsDB_rawDB",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_synapsesqlondemand_rawdb",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "AzureSqlDWTable",
+		"schema": []
+	},
+	"type": "Microsoft.DataFactory/factories/datasets"
+}
